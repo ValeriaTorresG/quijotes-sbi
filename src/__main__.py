@@ -10,14 +10,14 @@ from .inference import SBITrainer
 from .pipeline import SBIPipeline
 
 
-def main():
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--base', type=Path, default=Path('/pscratch/sd/v/vtorresg/quijotes/PowerSpectrum/FoF/latin_hypercube'))
     parser.add_argument('--params-file', type=Path, default=Path(__file__).resolve().parents[1] / 'latin_hypercube_params.txt')
     parser.add_argument('--envs', nargs='+', choices=tuple(ENVIRONMENT_FILES), default=['void'])
     parser.add_argument('--compare', action='store_true')
-    parser.add_argument('--n-cubes', type=int, default=800)
-    parser.add_argument('--n-train', type=int, default=720)
+    parser.add_argument('--n-cubes', type=int, default=1000)
+    parser.add_argument('--n-train', type=int, default=900)
     parser.add_argument('--n-samples', type=int, default=5000)
     parser.add_argument('--kmin', type=float, default=0.01)
     parser.add_argument('--kmax', type=float, default=0.5)
