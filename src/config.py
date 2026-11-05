@@ -79,6 +79,38 @@ class TrainingConfig:
 
 
 @dataclass(frozen=True)
+class MomentTrainingConfig:
+    """Two-stage Moment Network defaults; each network has its own early stopping."""
+    n_train: int = 720
+    split_seed: int = 42
+    train_seed: int = 42
+    hidden_features: int = 128
+    hidden_layers: int = 2
+    batch_size: int = 128
+    learning_rate: float = 5e-4
+    validation_fraction: float = 0.1
+    patience: int = 30
+    max_epochs: int = 1000
+    device: str = 'cpu'
+
+    def __post_init__(self):
+        if isinstance(self.n_train, bool) or not isinstance(self.n_train, Integral) or self.n_train < 5:
+            raise ValueError('Moment Networks require at least 5 training cubes for five folds.')
+        for name in ('hidden_features', 'hidden_layers', 'batch_size', 'patience', 'max_epochs'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+                raise ValueError(f'{name} must be a positive integer.')
+        if not isfinite(self.learning_rate) or self.learning_rate <= 0:
+            raise ValueError('learning_rate must be finite and positive.')
+        if not 0 < self.validation_fraction < 1:
+            raise ValueError('validation_fraction must lie between 0 and 1.')
+        for name in ('split_seed', 'train_seed'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+                raise ValueError(f'{name} must be a nonnegative integer.')
+
+
+@dataclass(frozen=True)
 class EvaluationConfig:
     n_samples: int = 5000
     sample_seed: int = 123

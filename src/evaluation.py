@@ -26,6 +26,7 @@ class EvaluationResult:
     cube_ids: np.ndarray
     parameter_names: tuple[str, ...]
     config: EvaluationConfig
+    interval_method: str = 'posterior_quantiles'
 
     @property
     def summary(self) -> pd.DataFrame:
@@ -66,3 +67,23 @@ class PosteriorEvaluator:
         return EvaluationResult(truth=truth, means=means, stds=stds, low68=low68, high68=high68,
                                 low95=low95, high95=high95, cube_ids=test_cube_ids.copy(),
                                 parameter_names=fit.split.data.parameter_names, config=self.config)
+
+
+class MomentEvaluator:
+    """Evaluate direct moments; central intervals assume Gaussian marginal shapes."""
+    def __init__(self, config: EvaluationConfig | None = None):
+        self.config = config or EvaluationConfig()
+
+    def evaluate(self, fit) -> EvaluationResult:
+        truth = fit.split.theta_test.detach().cpu().numpy()
+        means, stds = fit.predict_moments(fit.split.x_test)
+        means, stds = means.numpy(), stds.numpy()
+        if means.shape != truth.shape or stds.shape != truth.shape or not np.isfinite(means).all() or not np.isfinite(stds).all():
+            raise ValueError('Invalid Moment Network predictions.')
+        z68, z95 = 0.994457883209753, 1.95996398454005
+        return EvaluationResult(truth=truth, means=means, stds=stds,
+                                low68=means - z68 * stds, high68=means + z68 * stds,
+                                low95=means - z95 * stds, high95=means + z95 * stds,
+                                cube_ids=fit.split.test_cube_ids.copy(),
+                                parameter_names=fit.split.data.parameter_names, config=self.config,
+                                interval_method='gaussian_from_moments')

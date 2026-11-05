@@ -49,24 +49,30 @@ class SBIPlotter:
             ax.set(xlabel='True value', ylabel='Mean posterior', title=label)
             ax.grid(alpha=0.2)
 
-        prediction_fig.suptitle(' + '.join(result.fit.split.data.envs))
+        method = getattr(ev, 'interval_method', 'posterior_quantiles')
+        suffix = ' (MN; Gaussian moment intervals)' if method == 'gaussian_from_moments' else ''
+        prediction_fig.suptitle(' + '.join(result.fit.split.data.envs) + suffix)
         prediction_fig.tight_layout()
 
         coverage_fig, ax = plt.subplots(figsize=(7, 4))
         summary, positions = ev.summary, np.arange(len(labels))
-        ax.bar(positions - 0.18, summary['coverage_68'], width=0.36, label='68\% interval', color='royalblue')
-        ax.bar(positions + 0.18, summary['coverage_95'], width=0.36, label='95\% interval', color='darkorange')
+        ax.bar(positions - 0.18, summary['coverage_68'], width=0.36, label='68% interval', color='royalblue')
+        ax.bar(positions + 0.18, summary['coverage_95'], width=0.36, label='95% interval', color='darkorange')
         ax.axhline(0.68, color='royalblue', linestyle='--')
         ax.axhline(0.95, color='darkorange', linestyle='--')
 
         ax.set_xticks(positions, labels)
         ax.set(ylim=(0, 1), ylabel='Fraction containing the true value')
+        if method == 'gaussian_from_moments':
+            ax.set_title('Gaussian intervals inferred from MN moments')
         ax.legend()
         coverage_fig.tight_layout()
         return prediction_fig, coverage_fig
 
     def posterior(self, result: ExperimentResult, idx: int = 0, n_samples: int = 50_000, seed: int = 123):
         '''Return marginal posterior histograms for one held-out cube.'''
+        if not hasattr(result.fit, 'sample'):
+            raise ValueError('Moment Networks provide moments, not posterior samples or densities.')
         if not 0 <= idx < len(result.fit.split.test_rows):
             raise IndexError('idx must index a held-out cube.')
 
