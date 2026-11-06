@@ -107,6 +107,16 @@ Each experiment directory contains:
 Runs with several experiments add `comparison.csv`, `fiducial_comparison.csv`
 and comparison figures. Results are saved as each experiment finishes.
 
+Figures use LaTeX (if installed) at 360 dpi. To redraw them from saved results
+without retraining, for example after changing `src/plotting.py`:
+
+```bash
+python -m src replot results/<run>            # --no-model skips the posterior corners
+```
+
+Posterior corners sample the saved `model.pt`. Fisher ellipses and feature
+correlations need the `fisher.npz` that `python -m src fisher` now saves.
+
 ## Python API
 
 ```python

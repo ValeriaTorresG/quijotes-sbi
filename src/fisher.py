@@ -154,7 +154,8 @@ class FisherForecaster:
         return FisherResult(parameters, tuple(b.name for b in blocks), fisher, mean, covariance, precision,
                             derivatives, errors, n, used, hartlap, float(np.linalg.cond(fisher)),
                             block_sizes=fiducial.block_sizes,
-                            fisher_compressed=_compressed_fisher(x, precision, diffs))
+                            fisher_compressed=_compressed_fisher(x, precision, diffs, self.config.compressed_splits,
+                                                                 self.config.split_seed))
 
     def _finite_differences(self, parameter, blocks, n_derivative):
         '''Per-realization differences (already matched by seed) and the step they divide by.'''
@@ -216,10 +217,15 @@ def geometric_mean(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return 0.5 * (out + out.T)
 
 
-def _compressed_fisher(x_fid: np.ndarray, precision: np.ndarray, diffs: list[np.ndarray]) -> np.ndarray | None:
+def _compressed_fisher(x_fid: np.ndarray, precision: np.ndarray, diffs: list[np.ndarray], n_splits: int = 100,
+                       seed: int = 0) -> np.ndarray | None:
     '''Conservative Fisher: compress with one half of the derivative sims, evaluate with the other.
 
-    Averaged over the two assignments of halves. The compressed statistics
+    Averaged over ``n_splits`` random half-splits (both assignments of each).
+    One split alone is noisy (~20 % in sigma for Omega_b and h with ~200
+    features), enough to make the combined estimator non-monotonic when
+    blocks are added. Realizations are permuted jointly for all parameters so
+    seed-matched differences stay paired. The compressed statistics
     t = dmu_A C^-1 x have P dimensions, so their covariance (from the fiducial
     sims) and its Hartlap factor are well determined.
     '''
@@ -227,19 +233,27 @@ def _compressed_fisher(x_fid: np.ndarray, precision: np.ndarray, diffs: list[np.
     if n < 4:
         return None
     half = n // 2
+    rng = np.random.default_rng(seed)
+    orders = [rng.permutation(n) for _ in range(n_splits)]
     estimates = []
-    for first, second in ((slice(0, half), slice(half, 2 * half)), (slice(half, 2 * half), slice(0, half))):
-        d_first = np.array([d[first].mean(axis=0) for d in diffs])
-        d_second = np.array([d[second].mean(axis=0) for d in diffs])
-        compression = d_first @ precision                      # (P, D)
-        t = x_fid @ compression.T                              # (N, P)
-        n_fid, p = t.shape
-        cov_t = np.atleast_2d(np.cov(t, rowvar=False, ddof=1))
-        dt = d_second @ compression.T                          # dt[a, b] = d t_b / d theta_a
-        fisher = dt @ (((n_fid - p - 2) / (n_fid - 1)) * np.linalg.inv(cov_t)) @ dt.T
-        estimates.append(0.5 * (fisher + fisher.T))
-    fisher = 0.5 * (estimates[0] + estimates[1])
+    for order in orders:
+        a, b = order[:half], order[half:2 * half]
+        estimates += [_compressed_once(x_fid, precision, diffs, a, b), _compressed_once(x_fid, precision, diffs, b, a)]
+    fisher = np.mean(estimates, axis=0)
     return fisher if np.linalg.eigvalsh(fisher).min() > 0 else None
+
+
+def _compressed_once(x_fid, precision, diffs, first, second):
+    '''Compressed Fisher with derivatives from rows ``first`` (compression) and ``second`` (evaluation).'''
+    d_first = np.array([d[first].mean(axis=0) for d in diffs])
+    d_second = np.array([d[second].mean(axis=0) for d in diffs])
+    compression = d_first @ precision                      # (P, D)
+    t = x_fid @ compression.T                              # (N, P)
+    n_fid, p = t.shape
+    cov_t = np.atleast_2d(np.cov(t, rowvar=False, ddof=1))
+    dt = d_second @ compression.T                          # dt[a, b] = d t_b / d theta_a
+    fisher = dt @ (((n_fid - p - 2) / (n_fid - 1)) * np.linalg.inv(cov_t)) @ dt.T
+    return 0.5 * (fisher + fisher.T)
 
 
 def _common_ids(*sets):

@@ -112,6 +112,8 @@ class ExperimentResult:
         if self.fisher is not None:
             self.fisher.summary().to_csv(directory / 'fisher.csv', index=False)
             diagnostics['fisher_matrix'] = self.fisher.fisher
+            diagnostics['fisher_covariance'] = self.fisher.covariance
+            diagnostics['fisher_block_sizes'] = np.asarray(self.fisher.block_sizes, dtype=np.int64)
         if isinstance(self.fit, MomentFitResult):
             diagnostics['oof_means'] = self.fit.oof_means.numpy()
             diagnostics['oof_fold'] = self.fit.oof_fold.numpy()
@@ -187,6 +189,10 @@ class SBIPipeline:
     def _run_one(self, name: str, data: SpectrumDataset) -> ExperimentResult:
         fisher = compressor = None
         extra = {}
+        store = getattr(self.loader, 'store', None)
+        if store is not None:
+            extra['data'] = {'root': str(store.layout.root), 'params_file': str(store.layout.params_file),
+                             'cache_dir': str(store.cache_dir)}
         if self.fisher is not None:
             fisher = self._fisher(data.envs, self.fisher.config.parameters)
         if self._wants_compression:

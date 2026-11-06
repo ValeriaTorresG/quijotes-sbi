@@ -283,9 +283,15 @@ class FisherConfig:
     n_derivative: int | None = None
     hartlap: bool = True
     mnu_derivative: str = 'second_order'
+    # Random half-splits of the derivative sims averaged in the compressed
+    # (conservative) Fisher; a single split scatters by ~20 % for long vectors.
+    compressed_splits: int = 100
+    split_seed: int = 0
 
     def __post_init__(self):
         known = set(PARAMETER_NAMES) | {'Mnu'}
+        _positive_int(self.compressed_splits, 'compressed_splits')
+        _seed(self.split_seed, 'split_seed')
         if not self.parameters or len(set(self.parameters)) != len(self.parameters) \
                 or not set(self.parameters) <= known:
             raise ValueError(f'parameters must be distinct names among {sorted(known)}.')

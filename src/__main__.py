@@ -15,7 +15,7 @@ from .config import ALL_SETS, PARAMETER_NAMES, DataLayout, EvaluationConfig, Fea
     MomentTrainingConfig, SpectrumConfig, TrainingConfig, PK_SAMPLES
 from .products import PRODUCTS, SAMPLES
 
-COMMANDS = ('inventory', 'validate', 'fisher', 'train')
+COMMANDS = ('inventory', 'validate', 'fisher', 'train', 'replot')
 
 
 def _common(parser):
@@ -79,6 +79,12 @@ def build_parser():
     p.add_argument('--convergence', action='store_true')
     p.add_argument('--output', type=Path, default=Path('results/fisher'))
     p.add_argument('--plots', action='store_true')
+
+    p = sub.add_parser('replot', help='Redraw figures from saved results (no retraining)')
+    p.add_argument('paths', nargs='+', type=Path, help='Result folders (searched recursively)')
+    p.add_argument('--no-model', action='store_true', help='Skip figures that sample the saved model')
+    p.add_argument('--n-samples', type=int, default=20_000, help='Posterior samples for corner plots')
+    p.add_argument('--device', default='cpu')
 
     p = sub.add_parser('train', help='Train and validate NPE / Moment Networks')
     _common(p), _features(p), _experiments(p)
@@ -156,7 +162,7 @@ def _experiment_specs(args) -> dict[str, str]:
 
 def _save_figure(fig, path):
     import matplotlib.pyplot as plt
-    fig.savefig(path, dpi=180, bbox_inches='tight')
+    fig.savefig(path, bbox_inches='tight')  # dpi from the plotting style
     plt.close(fig)
 
 
@@ -229,6 +235,10 @@ def cmd_fisher(args):
     for name, spec in specs.items():
         result = forecaster.compute(spec)
         results[name] = result
+        (args.output / name).mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(args.output / name / 'fisher.npz', fisher=result.fisher, covariance=result.covariance,
+                            mean=result.mean, derivatives=result.derivatives, parameters=np.array(result.parameters),
+                            blocks=np.array(result.blocks), block_sizes=np.asarray(result.block_sizes, dtype=np.int64))
         table = result.summary().assign(experiment=name, blocks=spec, n_features=result.mean.size,
                                         condition_number=result.condition_number)
         tables.append(table)
@@ -398,6 +408,20 @@ def _comparison_plots(all_results, comparison, output):
                 _save_figure(plotter.fisher_ellipses(chunk), output / f'fisher_ellipses_{start // len(SERIES)}.png')
 
 
+def cmd_replot(args):
+    from .replot import replot
+    failed = 0
+    for path in args.paths:
+        report = replot(path, with_model=not args.no_model, n_samples=args.n_samples, device=args.device)
+        for status, what in report:
+            if status != 'ok':
+                print(f'{status:5s} {what}', flush=True)
+        done = sum(s == 'ok' for s, _ in report)
+        failed += sum(s == 'error' for s, _ in report)
+        print(f'{path}: {done} figures redrawn', flush=True)
+    return 1 if failed else 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] not in COMMANDS and argv[0] not in ('-h', '--help'):
@@ -406,7 +430,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return {'inventory': cmd_inventory, 'validate': cmd_validate, 'fisher': cmd_fisher,
-                'train': cmd_train}[args.command](args)
+                'train': cmd_train, 'replot': cmd_replot}[args.command](args)
     except ValueError as error:
         parser.error(str(error))
 

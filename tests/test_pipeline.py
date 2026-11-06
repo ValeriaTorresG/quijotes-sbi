@@ -226,6 +226,17 @@ class FisherTest(unittest.TestCase):
         self.assertLess(abs(np.log(ratio_comb)), min(abs(np.log(ratio_std)), abs(np.log(ratio_comp))))
 
 
+    def test_compressed_fisher_is_stable_across_splits(self):
+        '''Averaging many random half-splits removes the split-to-split scatter of a single split.'''
+        loader = FakeLoader(n_fid=4000, n_der=100, d=60, matched=False, seed=3, derivative_noise=0.03)
+        single = [FisherForecaster(loader, FisherConfig(compressed_splits=1, split_seed=s)).compute('pk:void')
+                  .sigma_compressed for s in range(6)]
+        many = [FisherForecaster(loader, FisherConfig(compressed_splits=100, split_seed=s)).compute('pk:void')
+                .sigma_compressed for s in range(3)]
+        spread = lambda values: np.max(np.std(values, axis=0) / np.mean(values, axis=0))
+        self.assertLess(spread(many), 0.3 * spread(single))
+
+
 class ExactGaussianPosterior:
     '''Conjugate posterior of theta ~ U-free Gaussian model, used to test the metrics.'''
 
@@ -329,6 +340,14 @@ class EndToEndSmoke(SyntheticTree):
         for name in ('summary.csv', 'calibration.csv', 'fiducial_summary.csv', 'fisher.csv', 'metadata.json',
                      'scores.json', 'diagnostics.npz', 'model.pt'):
             self.assertTrue((directory / name).is_file(), name)
+        from src.replot import replot
+        for name in ('prediction.png', 'calibration.png', 'posterior.png', 'fiducial_posterior.png', 'correlation.png'):
+            (directory / name).unlink(missing_ok=True)
+        report = replot(directory, n_samples=200)
+        self.assertFalse([r for r in report if r[0] == 'error'], report)
+        for name in ('prediction.png', 'calibration.png', 'sbc.png', 'tarp.png', 'fiducial_scatter.png',
+                     'posterior.png', 'fiducial_posterior.png', 'correlation.png'):
+            self.assertTrue((directory / name).is_file(), name)
         model = TrainedPosterior.load(directory / 'model.pt')
         x = result.fit.split.x_test[0]
         a = model.sample(x, 32, seed=3)
@@ -343,7 +362,13 @@ class EndToEndSmoke(SyntheticTree):
                     plotter.fiducial_posterior(result, result.fiducial_x[0], n_samples=500),
                     plotter.fiducial_scatter(result), plotter.compare_errors(results),
                     plotter.compare_metrics(pipeline.compare(results)), plotter.correlation(result.fisher),
-                    plotter.fisher_ellipses({k: r.fisher for k, r in results.items()})):
+                    plotter.fisher_ellipses({k: r.fisher for k, r in results.items()}),
+                    plotter.posterior_comparison(
+                        {k: (r.fit.sample(r.fiducial_x[0], 500, seed=1).numpy(), r.fisher) for k, r in results.items()},
+                        result.evaluation.parameter_names, truth=result.fiducial.truth[0]),
+                    plotter.posterior_panels(
+                        {k: (r.fit.sample(r.fiducial_x[0], 500, seed=1).numpy(), r.fisher) for k, r in results.items()},
+                        result.evaluation.parameter_names, truth=result.fiducial.truth[0], levels=(0.68, 0.95))):
             self.assertIsNotNone(fig)
 
 
