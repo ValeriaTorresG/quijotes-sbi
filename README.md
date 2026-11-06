@@ -40,11 +40,16 @@ environments, and a bare sample name (`void`) means `pk:void`.
 
 | Block | Features |
 | --- | --- |
-| `pk:<sample>` | log10 P0(k), `--kmin` ≤ k ≤ `--kmax` (39 bins by default) |
-| `pkrsd:<sample>` | log10 P0 and P_l/P0 (`--rsd-multipoles`) |
+| `pk:<sample>` | asinh(P0(k)/1000), shot noise subtracted, `--kmin` ≤ k ≤ `--kmax` (39 bins by default) |
+| `pkrsd:<sample>` | the same for P0, plus P_l/P0 (`--rsd-multipoles`) |
 | `nbar:<sample>` | log10 number of objects |
 | `hmf:<sample>` | log10(1+N) halos per mass bin (`--hmf-edges`, lowest edge above the 20-particle limit) |
 | `astra:<env>` | log10(1+N) halos per ASTRA-probability bin (`--astra-bins`) |
+
+P(k) uses `Pk0_shot_subtracted` by default (`--shot-noise raw` for the raw
+spectrum). Subtracted P(k) goes negative at high k for void halos in most cubes,
+so the default transform is asinh, which is log-like for large P and linear
+around zero. `--transform log10` requires `--shot-noise raw`.
 
 
 ## Inference

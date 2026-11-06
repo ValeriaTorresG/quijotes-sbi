@@ -182,12 +182,10 @@ class QuijoteDataLoader:
                  show_progress: bool = True):
         self.base, self.params_file = Path(base), Path(params_file)
         self.env_files = dict(ENVIRONMENT_FILES if env_files is None else env_files)
-        # The legacy reader takes the file's 'Pk0' (raw in the LH files) and only knows log10/none.
-        self.config = config or SpectrumConfig(transform='log10', shot_noise='raw')
-        if self.config.transform not in ('log10', 'none') or self.config.shot_noise != 'raw':
-            raise ValueError("QuijoteDataLoader supports only shot_noise='raw' with transform log10 or none; "
-                             'use features.QuijoteSummaryLoader for the other options.')
-        self.reader = reader or NPZSpectrumReader()
+        self.config = config or SpectrumConfig()
+        # Read the requested P(k) explicitly; 'Pk0' itself is ambiguous across Quijote sets.
+        self.reader = reader or NPZSpectrumReader(
+            pk_key='Pk0_shot_subtracted' if self.config.shot_noise == 'subtracted' else 'Pk0_raw')
         self.parameter_names = tuple(parameter_names)
         self.show_progress = show_progress
 
@@ -236,8 +234,11 @@ class QuijoteDataLoader:
 
                 if self.config.transform == 'log10':
                     if np.any(pk <= 0):
-                        raise ValueError(f'log10 requires positive Pk in selected bins: {path}')
+                        raise ValueError(f'log10 requires positive Pk in selected bins (use transform="asinh" '
+                                         f'or shot_noise="raw"): {path}')
                     pk = np.log10(pk)
+                elif self.config.transform == 'asinh':
+                    pk = np.arcsinh(pk / self.config.asinh_scale)
                 rows.append(pk)
             block = np.stack(rows)
             blocks.append(block)

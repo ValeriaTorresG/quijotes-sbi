@@ -152,6 +152,24 @@ class StoreAndFeatures(SyntheticTree):
             loader.load('hmf:all')
 
 
+class FeatureTransforms(unittest.TestCase):
+    def test_default_is_subtracted_asinh_and_accepts_negative_power(self):
+        from src.features import Block, block_features
+        from src.store import ProductTable
+        k = np.array([0.05, 0.1, 0.2])
+        raw = np.array([[5e3, 3e3, 2e3]])
+        sub = raw - 2.5e3  # last bin below shot noise, as for void halos at high k
+        table = ProductTable('fiducial', 'pk', 'void', np.array([0]),
+                             {'pk_raw': raw, 'pk_sub': sub, 'n_objects': np.array([400_000])}, {'k': k})
+        x, _ = block_features(Block('pk', 'void'), table, FeatureConfig())
+        np.testing.assert_allclose(x, np.arcsinh(sub / 1000.0))
+        with self.assertRaisesRegex(DataValidationError, 'asinh'):
+            block_features(Block('pk', 'void'), table, FeatureConfig(spectrum=SpectrumConfig(transform='log10')))
+        x, _ = block_features(Block('pk', 'void'), table,
+                              FeatureConfig(spectrum=SpectrumConfig(transform='log10', shot_noise='raw')))
+        np.testing.assert_allclose(x, np.log10(raw))
+
+
 class FakeLoader:
     '''Linear-Gaussian model: x = A theta + noise, with exact Fisher A^T C^-1 A.'''
 
