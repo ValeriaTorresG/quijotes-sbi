@@ -50,7 +50,11 @@ class TextSpectrumReader:
 
 @dataclass
 class SpectrumDataset:
-    '''Features ordered by envs; theta row is params[cube_id], never file order.'''
+    '''Features ordered by blocks (``envs``); theta row is params[cube_id], never file order.
+
+    ``k`` maps each block to its abscissa (k for spectra, bin centres for
+    histograms) and ``config`` is the SpectrumConfig or FeatureConfig used.
+    '''
     x: torch.Tensor
     theta: torch.Tensor
     cube_ids: np.ndarray
@@ -86,6 +90,15 @@ class SpectrumDataset:
         if not self.envs or start != self.x.shape[1]:
             raise ValueError('Environment features must cover all x columns.')
 
+
+    @property
+    def blocks(self) -> tuple[str, ...]:
+        '''Feature-block names (``envs`` is kept for backwards compatibility).'''
+        return self.envs
+
+    @property
+    def n_features(self) -> int:
+        return self.x.shape[1]
 
     def select(self, envs: str | Iterable[str]) -> SpectrumDataset:
         '''Reuse loaded features for an individual environment or a combination.'''
@@ -154,7 +167,13 @@ def _environment_names(envs: str | Iterable[str]) -> tuple[str, ...]:
 
 
 class QuijoteDataLoader:
-    '''Load base/<cube_id>/<env_filename> and align spectra to parameter rows.'''
+    '''Legacy loader: base/<cube_id>/<env_filename> of the latin hypercube only.
+
+    Kept for the original notebooks. New code should use
+    ``features.QuijoteSummaryLoader``, which validates file metadata, caches,
+    reads ``Pk0_raw``/``Pk0_shot_subtracted`` explicitly and also serves the
+    fiducial and derivative sets.
+    '''
     def __init__(self, base: str | Path, params_file: str | Path,
                  env_files: Mapping[str, str] | None = None,
                  config: SpectrumConfig | None = None,
@@ -163,7 +182,11 @@ class QuijoteDataLoader:
                  show_progress: bool = True):
         self.base, self.params_file = Path(base), Path(params_file)
         self.env_files = dict(ENVIRONMENT_FILES if env_files is None else env_files)
-        self.config = config or SpectrumConfig()
+        # The legacy reader takes the file's 'Pk0' (raw in the LH files) and only knows log10/none.
+        self.config = config or SpectrumConfig(transform='log10', shot_noise='raw')
+        if self.config.transform not in ('log10', 'none') or self.config.shot_noise != 'raw':
+            raise ValueError("QuijoteDataLoader supports only shot_noise='raw' with transform log10 or none; "
+                             'use features.QuijoteSummaryLoader for the other options.')
         self.reader = reader or NPZSpectrumReader()
         self.parameter_names = tuple(parameter_names)
         self.show_progress = show_progress

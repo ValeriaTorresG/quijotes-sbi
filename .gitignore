@@ -3,3 +3,5 @@ __pycache__/
 **/sbi-logs/**
 **/.ipynb_checkpoints/**
 results/
+cache/
+slurm-*.out

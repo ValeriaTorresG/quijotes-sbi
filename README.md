@@ -1,268 +1,140 @@
 # quijotes-sbi
 
-Clases en `src/` para reutilizar el flujo de `sbi_env.ipynb`, `sbi_all.ipynb` y
-`sbi_init.ipynb`: lectura de espectros de potencia de los cubos Latin hypercube,
-SBI por ambiente y SBI con espectros concatenados.
+Simulation-based inference of `Omega_m, Omega_b, h, n_s, sigma8` from cosmic-web
+environment statistics of Quijote FoF halos (z = 0.5, 1 (Gpc/h)³) classified with
+ASTRA. It follows GIGANTES ([Kreisch et al. 2022](https://iopscience.iop.org/article/10.3847/1538-4357/ac7d4b)):
+a **Fisher forecast** from the fiducial and derivative sets, and **neural
+inference** trained on the latin hypercube (NPE ensembles and Moment Networks).
 
-Usa Python >= 3.10 con las dependencias de `requirements.txt`. El código se ha
-verificado con el entorno del kernel **Python (sbi)** de los notebooks y sbi 0.27.
-Ejecuta los ejemplos desde la raíz del repositorio para poder importar `src`.
+## Data
 
-```bash
-python -m pip install -r requirements.txt
-```
+| Product | LH | Fiducial | Derivatives (14 sets) |
+| --- | --- | --- | --- |
+| `pk`: real-space P0(k) for `all`, `void`, `sheet`, `filament`, `knot`, `random_void` | 2000 | 2000 | 500 each |
+| `pk_rsd`: redshift-space P0, P2, P4 | **54–84** | 2000 | 500 each |
+| `astra`: per-halo environment probabilities | 2000 | 2000 | 500 each |
+| `hmf`: FoF halo masses + ASTRA labels | 2000 | 2000 | 500 each |
 
-## Ejecutar desde la terminal
+Derivative sets: `Om`, `Ob2`, `h`, `ns`, `s8` (±), plus `fiducial_ZA` and
+`Mnu_p/pp/ppp` for Mν (Fisher only; the LH has massless neutrinos). Run `python -m src inventory` to check completeness.
 
-Desde la raíz del repositorio y con el entorno `sbi` activo:
+**Validation.** A file is rejected, with its path in the error, if any of these holds:
+- its metadata (set, realization, snapshot, box, sample, space, z) does not match its location;
+- its `omega_m` differs from the parameter file;
+- the shot noise is inconsistent;
+- the ASTRA probabilities are malformed;
+- the FoF particle mass does not match Ω_m.
 
-```bash
-source /pscratch/sd/v/vtorresg/venvs/sbi/bin/activate
+Across products, the counts must agree in every realization:
+- environment counts sum to the full catalog;
+- ASTRA argmax counts equal the P(k) `n_objects`;
+- the FoF halo count equals the number of ASTRA rows.
 
-# Un ambiente: 800 cubos, 720 para train y 80 para test.
-python -m src --envs void --plots
+All 128 tables currently pass.
 
-# Un único modelo con los cuatro ambientes concatenados.
-python -m src --envs void sheet filament knot --plots
 
-# Cada ambiente por separado y además la combinación, con los mismos IDs train/test.
-python -m src --envs void sheet filament knot --compare --plots
+## Experiments
 
-# Comprobación breve del flujo (no es un entrenamiento para resultados científicos).
-python -m src --envs void --n-cubes 24 --n-train 20 \
-    --max-epochs 2 --hidden-features 16 --num-transforms 2 \
-    --batch-size 8 --n-samples 16 --output results/smoke
+An experiment concatenates blocks `statistic:sample`. `envs` expands to the four
+environments, and a bare sample name (`void`) means `pk:void`.
 
-python -m src --help
-```
-
-Los comandos usan las rutas de datos de los notebooks; se pueden cambiar con
-`--base` y `--params-file`. Por defecto, guardan `summary.csv`, `diagnostics.npz`
-y `metadata.json` en `results/<ambientes>`; `--plots` añade tres figuras PNG.
-`--compare` guarda una carpeta por modelo y `comparison.csv` bajo
-`results/comparison`. Puedes elegir otro destino con `--output`.
-Estos archivos contienen diagnósticos y configuración; el posterior entrenado
-se mantiene en memoria durante la ejecución. Para usarlo después del ajuste
-en un notebook, utiliza `pipeline.run(...)` y `result.posterior`.
-Ejecuta los entrenamientos completos en un nodo de cómputo.
-
-## Un ambiente o una combinación
-
-```python
-from pathlib import Path
-from src import (
-    QuijoteDataLoader, SpectrumConfig, TrainingConfig, EvaluationConfig,
-    SBITrainer, PosteriorEvaluator, SBIPipeline, SBIPlotter,
-)
-
-loader = QuijoteDataLoader(
-    base=Path('/pscratch/sd/v/vtorresg/quijotes/PowerSpectrum/FoF/latin_hypercube'),
-    params_file=Path('latin_hypercube_params.txt'),
-    config=SpectrumConfig(kmin=0.01, kmax=0.5, transform='log10'),
-)
-trainer = SBITrainer(TrainingConfig(n_train=720, split_seed=42, train_seed=42))
-evaluator = PosteriorEvaluator(EvaluationConfig(n_samples=5000, sample_seed=123))
-pipeline = SBIPipeline(loader, trainer, evaluator)
-
-# Un modelo condicionado en Pk de void.
-result = pipeline.run(envs='void', cube_ids=range(800))
-print(result.summary.to_string(index=False))
-
-# Otro modelo condicionado en la concatenación de cuatro espectros.
-combined = pipeline.run(
-    envs=['void', 'sheet', 'filament', 'knot'], cube_ids=range(800),
-)
-print(combined.summary)
-
-# Figuras reutilizables, sin imponer LaTeX ni modificar rcParams.
-plotter = SBIPlotter()
-fig_prediction, fig_coverage = plotter.diagnostics(combined)
-fig_posterior = plotter.posterior(combined, idx=0, n_samples=50_000)
-fig_prediction.savefig('prediction.png', dpi=200, bbox_inches='tight')
-# En un notebook, puedes terminar la celda con fig_prediction o usar plt.show().
-
-# Exporta métricas, intervalos, IDs train/test y configuración; no guarda el modelo.
-combined.save_diagnostics('results/combined')
-```
-
-`all` es el espectro del catálogo completo de halos. Para combinar ambientes se
-pasa una lista: se concatenan las características, en ese orden, y se entrena un
-único modelo NPE. Los ambientes disponibles son `all`, `void`, `sheet`,
-`filament`, `knot` y `random_void`.
-
-## Comparar ambientes con los mismos cubos
-
-`run_many` lee cada ambiente una sola vez y reutiliza sus características. Entrena
-un modelo independiente por entrada del diccionario. La selección train/test se
-hace por ID de cubo, usando `n_train` y `split_seed`, y coincide entre todos los
-experimentos para los mismos IDs, incluso si se pasan en otro orden.
-
-```python
-results = pipeline.run_many(
-    experiments={
-        'all': 'all',
-        'void': 'void',
-        'sheet': 'sheet',
-        'filament': 'filament',
-        'knot': 'knot',
-        'random_void': 'random_void',
-        'environments': ['void', 'sheet', 'filament', 'knot'],
-        'all_and_environments': ['all', 'void', 'sheet', 'filament', 'knot'],
-    },
-    cube_ids=range(800),
-)
-comparison = pipeline.compare(results)
-print(comparison)
-comparison.to_csv('comparison.csv', index=False)
-for name, experiment in results.items():
-    experiment.save_diagnostics(Path('results') / name)
-```
-
-La evaluación devuelve bias, RMSE, desviación posterior media, ancho medio del
-intervalo de 68 % y cobertura de los intervalos centrales de 68 % y 95 %, igual
-que los notebooks. `n_train=720` deja 80 cubos de prueba de un total de 800;
-`validation_fraction=0.1` reserva además parte de esos 720 para validación interna
-de SBI. Para reproducir la partición de `sbi_all.ipynb`, usa `n_train=450`.
-
-## Usar las clases por separado
-
-```python
-# Leer una sola vez y elegir subconjuntos de ambientes en memoria.
-data = loader.load(['all', 'void', 'sheet', 'filament', 'knot'], range(800))
-void_data = data.select('void')
-env_data = data.select(['void', 'sheet', 'filament', 'knot'])
-
-# x: (n_cubos, n_características); theta: (n_cubos, 5).
-print(env_data.x.shape, env_data.theta.shape)
-print(env_data.k['void'], env_data.feature_slices['void'])
-
-fit = trainer.fit(env_data)
-evaluation = evaluator.evaluate(fit)
-print(evaluation.summary)
-print(fit.split.train_cube_ids, fit.split.test_cube_ids)
-
-# x debe tener el mismo orden de ambientes, bins y transformación del entrenamiento.
-samples = fit.sample(fit.split.x_test[0], n_samples=5000, seed=123)
-posterior = fit.posterior  # Objeto SBI para otros análisis.
-```
-
-| Clase | Responsabilidad |
+| Block | Features |
 | --- | --- |
-| `SpectrumConfig`, `TrainingConfig`, `PriorConfig`, `EvaluationConfig` | Configuración explícita y validada |
-| `NPZSpectrumReader`, `TextSpectrumReader` | Lectura de archivos sin entrenamiento |
-| `QuijoteDataLoader` | Selección de bins, transformación y alineación con los parámetros |
-| `SpectrumDataset`, `DatasetSplit` | Datos, bloques por ambiente y partición por cubo |
-| `SBITrainer`, `FitResult` | NPE con NSF, prior y muestreo posterior |
-| `PosteriorEvaluator`, `EvaluationResult` | Evaluación de los cubos de prueba |
-| `SBIPipeline`, `ExperimentResult` | Ejecución, comparación y exportación de diagnósticos |
-| `SBIPlotter` | Figuras de predicción, cobertura y posteriores marginales |
+| `pk:<sample>` | log10 P0(k), `--kmin` ≤ k ≤ `--kmax` (39 bins by default) |
+| `pkrsd:<sample>` | log10 P0 and P_l/P0 (`--rsd-multipoles`) |
+| `nbar:<sample>` | log10 number of objects |
+| `hmf:<sample>` | log10(1+N) halos per mass bin (`--hmf-edges`, lowest edge above the 20-particle limit) |
+| `astra:<env>` | log10(1+N) halos per ASTRA-probability bin (`--astra-bins`) |
 
-El orden de parámetros es `Omega_m`, `Omega_b`, `h`, `n_s`, `sigma8`. Los límites
-del prior conservan los valores de tus notebooks y se pueden sustituir mediante
-`SBITrainer(config=..., prior=PriorConfig(low=..., high=...))`.
 
-## Otros archivos y espectros de materia
+## Inference
 
-Para otros snapshots, nombres de archivo o estimadores, pasa `env_files` y un
-lector. `NPZSpectrumReader(k_key='k_center', pk_key='Pk0')` permite cambiar las
-claves del NPZ. Un lector propio solo necesita implementar `read(path)` y devolver
-`PowerSpectrum(k, pk, bin_low=None, bin_high=None)`.
+- **NPE** (`--method npe`): an equal-weight mixture of `--ensemble` (default 5)
+  independently trained flows (`--density-estimator nsf|maf|mdn`).
+  - `--embedding-dim N` adds a jointly trained MLP embedding.
+  - `--compression moped` replaces the features with score-compressed summaries
+    built only from the fiducial and derivative sets. These are optimal near the
+    fiducial and lossy far from it.
+- **Moment Networks** (`--method mn`, or `both`): marginal means and standard
+  deviations, using 5-fold out-of-fold residuals (Jeffrey & Wandelt 2020).
+  Intervals assume Gaussian marginals.
+
+## Validation metrics
+
+| Metric | Meaning |
+| --- | --- |
+| `bias`, `RMSE`, `R2` | accuracy of the posterior mean |
+| `coverage_68/95`, `calibration_error` | central-interval coverage (19 levels) vs nominal |
+| `pit_ks_pvalue`, `chi2` | rank (SBC) uniformity; mean squared z-score (≈ 1) |
+| `std_over_prior` | posterior std / prior std (1 = uninformative) |
+| `*_interior` | metrics away from the prior edges |
+| `nll` | −log q(θ_true \| x): proper score, lower is better |
+| `tarp_max_deviation` | joint-posterior calibration (TARP, Lemos et al. 2023) |
+
+`--fiducial N` evaluates the posterior on N fiducial realizations and compares
+it with Fisher. This catches systematic biases or processing differences between
+sets. Its coverage is frequentist at a single point: for prior-dominated
+parameters (h, Ω_b) it is close to 1 by construction. Bayesian calibration is
+measured on the test set.
+
+## Fisher
+
+`python -m src fisher` uses exactly the NPE features and reports three
+marginalized errors:
+- `sigma_fisher`: standard, with the Hartlap correction. Optimistic when the derivatives are noisy.
+- `sigma_fisher_compressed`: conservative (split-derivative compression).
+- `sigma_fisher_combined`: the geometric mean of the two ([Coulton & Wandelt 2023](https://arxiv.org/abs/2305.08994)).
+
+`--convergence` varies the number of covariance and derivative realizations, and
+`--fisher-params ... Mnu` adds neutrino mass. With the current data the
+covariance is converged, but the derivatives are not for Ω_b, h and n_s. Treat
+Fisher as a reference for those parameters; Ω_m and σ8 are robust.
+
+## Outputs
+
+Each experiment directory contains:
+- metrics: `summary.csv`, `calibration.csv`, `scores.json`, `fiducial_summary.csv`, `fisher.csv`;
+- `diagnostics.npz`: per-cube arrays and train/test IDs;
+- `metadata.json`: full configuration, ensemble training history, git commit and versions;
+- `model.pt`: the trained model;
+- with `--plots`: the figures.
+
+Runs with several experiments add `comparison.csv`, `fiducial_comparison.csv`
+and comparison figures. Results are saved as each experiment finishes.
+
+## Python API
 
 ```python
-from src import TextSpectrumReader
+from src import QuijoteSummaryLoader, TrainingConfig, SBITrainer, FisherForecaster, SBIPipeline, TrainedPosterior
 
-matter_loader = QuijoteDataLoader(
-    base='/pscratch/sd/v/vtorresg/quijotes/Pk/matter/latin_hypercube',
-    params_file='latin_hypercube_params.txt',
-    env_files={'matter': 'Pk_m_z=0.5.txt'},
-    reader=TextSpectrumReader(),
-)
-matter_pipeline = SBIPipeline(
-    matter_loader, SBITrainer(TrainingConfig(n_train=1800)), evaluator,
-)
-# Equivalente al flujo de sbi_init.ipynb, con 2000 cubos explícitos.
-# matter_result = matter_pipeline.run('matter', range(2000))
+loader = QuijoteSummaryLoader()
+pipeline = SBIPipeline(loader, SBITrainer(TrainingConfig(n_train=1800, ensemble_size=5, device='cuda')),
+                       fisher=FisherForecaster(loader), n_fiducial=500)
+results = pipeline.run_many({'void': 'pk:void', 'envs': 'pk:envs'})
+print(SBIPipeline.compare(results))
+results['envs'].save_diagnostics('results/envs')
+
+model = TrainedPosterior.load('results/envs/model.pt')
+fid = loader.load_set('fiducial', 'pk:envs')
+samples = model.sample(fid.x_tensor[0], n_samples=10_000, seed=1)
 ```
 
-El loader alinea `theta` con `params[cube_id]`, verifica las mallas de `k` y bordes
-entre cubos de cada ambiente y rechaza IDs repetidos o fuera del archivo de
-parámetros. Las mallas pueden diferir entre ambientes. Rechaza valores no finitos
-y `Pk <= 0` en los bins seleccionados cuando se usa `log10`; usa
-`SpectrumConfig(transform='none')` para conservar `Pk` sin logaritmo.
+Modules:
+- `config`: constants and configuration;
+- `fits`, `products`, `store`: validated readers and the cache;
+- `features`: blocks and datasets;
+- `fisher`: Fisher forecasts;
+- `inference`, `moments`: NPE and Moment Networks;
+- `evaluation`: metrics;
+- `pipeline`, `plotting`, `__main__`: orchestration, figures and the command line.
 
-## Verificación
+The original `QuijoteDataLoader` is kept for the notebooks.
+
+## Tests
 
 ```bash
 python -m unittest discover -s tests -v
-# Prueba breve adicional con NPE real, sin entrenar los modelos de 800 cubos:
-QUIJOTE_RUN_SBI_SMOKE=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m unittest discover -s tests -v
+QUIJOTE_RUN_SBI_SMOKE=1 OMP_NUM_THREADS=1 python -m unittest discover -s tests -v   # + end-to-end NPE
 ```
 
-Las semillas separan la partición, el entrenamiento y el muestreo. La
-reproducibilidad numérica también depende de las versiones y del dispositivo.
-Los valores por defecto conservan CPU y los hiperparámetros de los notebooks;
-puedes configurar `device='cuda'` en un nodo que disponga de GPU. Ejecuta los
-entrenamientos completos en un nodo de cómputo.
-
-## Segunda versión: Moment Networks
-
-La opción `--method mn` entrena dos redes densas consecutivas con el mismo lector,
-los mismos espectros transformados y la misma partición por ID de cubo que NPE.
-La primera estima la media marginal `F(x)`. Para entrenar la segunda se
-dividen **solo los cubos de entrenamiento** en cinco partes: cada red de medias
-se ajusta con cuatro partes y predice la quinta. El residuo cuadrático de cada
-cubo se calcula con una predicción hecha sin entrenar con ese cubo. La red de
-varianza aprende estos residuos y la red de medias final se reentrena con todos
-los cubos de entrenamiento. Es una adaptación de la jerarquía de [Jeffrey y
-Wandelt (2020), ecuaciones 4 y 5](https://arxiv.org/pdf/2011.05991), usada
-como método en la [aplicación de GIGANTES](https://arxiv.org/pdf/2107.02304)
-(sección 5).
-
-```bash
-# MN con un ambiente, usando los mismos 800 cubos y 720 para ajuste que NPE.
-python -m src --method mn --envs void --n-cubes 800 --n-train 720 --plots
-
-# Entrena ambos métodos sobre los mismos datos y escribe comparison.csv.
-python -m src --method both --envs void sheet filament knot \
-    --n-cubes 800 --n-train 720 --compare --plots
-```
-
-`--hidden-features` controla el ancho de ambas redes y `--hidden-layers` su
-profundidad (por defecto 128 y 2); `--num-transforms` solo aplica a NPE. Cada
-ajuste elige el número de épocas mediante validación interna y luego
-reentrena con todos sus cubos disponibles. Cada fold ajusta la normalización
-solo con sus cuatro partes; los modelos finales la ajustan con todos los cubos
-de entrenamiento, sin usar los cubos de prueba. Los residuos se forman en
-unidades físicas y la red de varianza los normaliza por la escala del parámetro
-al cuadrado. `diagnostics.npz` guarda `oof_means`, `oof_fold` y
-`oof_squared_residuals` en el orden de `train_cube_ids`; `metadata.json`
-registra las cinco particiones y las épocas seleccionadas. Los resultados MN se guardan bajo `results/mn_<ambientes>` o,
-en una comparación de métodos, bajo `results/method_comparison/mn/`.
-
-```python
-from src import (MomentTrainer, MomentTrainingConfig, MomentEvaluator,
-                 SBIPipeline)
-
-mn_pipeline = SBIPipeline(loader, MomentTrainer(MomentTrainingConfig(n_train=720)),
-                          MomentEvaluator())
-mn_result = mn_pipeline.run('void', range(800))
-mean, std = mn_result.fit.predict_moments(mn_result.fit.split.x_test[0])
-```
-
-MN entrega medias y desviaciones **marginales**, sin muestras ni densidad de la
-posterior conjunta. Para mantener las columnas de diagnóstico, los intervalos
-de 68 % y 95 % de MN se calculan como `media ± z * std` asumiendo marginales
-Gaussianas; `metadata.json` los identifica como `gaussian_from_moments`. Sus
-coberturas son una comprobación de esa aproximación y no cuantiles producidos
-por la red. Las figuras MN incluyen predicción y cobertura, sin histograma de
-posterior. El posterior de NPE sigue evaluándose con muestras. Los residuos
-out-of-fold reducen el sesgo optimista por sobreajuste de la red de medias,
-pero también incluyen su error de predicción: no garantizan una varianza
-posterior exacta. Cada red de fold usa menos ejemplos que la red de medias
-final.
-
-La comparación **NPE frente a MN en este repositorio** usa espectros de potencia
-`P(k)` de halos. GIGANTES usó la función de tamaños de voids, otro observable,
-así que sus errores numéricos no son directamente comparables con los de estos
-experimentos. Como en NPE, se guardan diagnósticos y configuración; las redes
-entrenadas permanecen en memoria.
+The tests build a synthetic Quijote tree with the real file formats.
